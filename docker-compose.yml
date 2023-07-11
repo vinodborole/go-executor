@@ -1,0 +1,18 @@
+version: '3'
+services:
+  redis:
+    image: redis:latest
+    ports:
+      - '6379:6379'
+  manager:
+    build:
+      context: ./manager
+      dockerfile: ../manager/Dockerfile
+    depends_on:
+      - redis
+  worker:
+    build:
+      context: ./worker
+      dockerfile: ../manager/Dockerfile
+    depends_on:
+      - redis
