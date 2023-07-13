@@ -16,3 +16,4 @@ services:
       dockerfile: ../manager/Dockerfile
     depends_on:
       - redis
+      - manager

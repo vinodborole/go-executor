@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -23,59 +24,69 @@ func main() {
 	}
 	fmt.Println("Connected to Redis:", pong)
 
-	// Consume messages from the Redis queue
-	consumeMessages(client)
+	// Wait for the manager to subscribe to the worker queue info before publishing
+	time.Sleep(5 * time.Second)
+
+	// Publish the worker Queue information to the server
+	workerQueue := publisWorkerQueueInfo(client)
+
+	go consumeWorkerQueue(client, workerQueue)
+
+	// Consume jobs from the jobs queue
+	consumeJobs(client, "jobs_queue")
 }
 
-func consumeMessages(client *redis.Client) {
+func publisWorkerQueueInfo(client *redis.Client) string {
+	workerQueue := "worker_queue_" + generateUniqueID()
+
+	err := client.Publish(client.Context(), "worker_queue_info", workerQueue).Err()
+	if err != nil {
+		log.Fatalf("Failed to publish worker queue info: %v", err)
+	}
+	return workerQueue
+}
+
+func consumeWorkerQueue(client *redis.Client, workerQueue string) {
 	for {
-		result, err := client.BLPop(client.Context(), 0, "myqueue").Result()
+		// Consume worker queue for any stop message from the server
+		message, err := client.RPop(client.Context(), workerQueue).Result()
 		if err != nil {
-			log.Printf("Failed to consume message: %v", err)
-		} else {
-			message := result[1]
-			fmt.Println("Worker consumed message:", message)
+			//log.Printf("Failed to consume worker queue: %v", err)
+			continue
+		}
+		fmt.Printf("Received message [%s] on worker queue [%s] to stop job execution:\n", message, workerQueue)
+	}
+}
 
-			// Perform 50% tasks with the consumed message
-			status := performTaskOne(message)
-
-			// Report task status as 50% done back to the server
-			reportStatus(client, message, status)
-
-			// Perform remaining 50% tasks with the consumed message
-			status = performTaskTwo(message)
-
-			// Report task status as 100% back to the server
-			reportStatus(client, message, status)
-
-			fmt.Println("Worker finished performing Task:", message)
+func consumeJobs(client *redis.Client, jobsQueue string) {
+	for {
+		// Consume job from the jobs queue
+		job, err := client.RPop(client.Context(), jobsQueue).Result()
+		if err != nil {
+			//log.Printf("Failed to consume job: %v", err)
+			continue
 		}
 
-		time.Sleep(time.Second) // Sleep for a second between consuming messages
+		if job == "" {
+			fmt.Println("No more jobs in the queue. Exiting...")
+			return
+		}
+
+		fmt.Println("Consumed job:", job)
+
+		// Perform job execution
+		time.Sleep(5 * time.Second) // Simulating job processing time
+
+		// Publish job status update
+		jobStatus := fmt.Sprintf("%s executed successfully", job)
+		err = client.Publish(client.Context(), "job_status_topic", jobStatus).Err()
+		if err != nil {
+			log.Printf("Failed to publish job status update: %v", err)
+		}
 	}
 }
 
-func performTaskOne(message string) string {
-	// Simulating task processing time
-	time.Sleep(3 * time.Second)
-
-	// Return a dummy task status
-	return "Completed 50% Task"
-}
-
-func performTaskTwo(message string) string {
-	// Simulating task processing time
-	time.Sleep(3 * time.Second)
-
-	// Return a dummy task status
-	return "Completed 100% Task"
-}
-
-func reportStatus(client *redis.Client, message, status string) {
-	err := client.RPush(client.Context(), "statusqueue", fmt.Sprintf("%s: %s", message, status)).Err()
-	if err != nil {
-		log.Printf("Failed to report task status: %v", err)
-	} else {
-		fmt.Printf("Reported task status: %s - %s\n", message, status)
-	}
+func generateUniqueID() string {
+	// Generate a unique ID based on the current timestamp
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }
